@@ -88,6 +88,17 @@ The state file (`STATE_FILE`, default `data/state.json`) stores which events wer
 
 Mixpanel's Export API allows 60 requests per hour. One poll every 10 minutes uses 6.
 
+## Running on GitHub Actions (no server needed)
+
+[`.github/workflows/mixpanel-hubspot-sync.yml`](.github/workflows/mixpanel-hubspot-sync.yml) runs everything from the repo:
+
+1. **Secrets** (Settings → Secrets and variables → Actions → Secrets): `HUBSPOT_ACCESS_TOKEN`, `MIXPANEL_SERVICE_ACCOUNT_USERNAME`, `MIXPANEL_SERVICE_ACCOUNT_SECRET`, `MIXPANEL_REGION`.
+2. **Create the properties**: go to Actions → *Mixpanel → HubSpot sync* → Run workflow → `setup-properties`.
+3. **Check the history**: run `backfill-dry-run` (optionally with a `from` date) and read the log. Then run `backfill`.
+4. **Turn on live sync**: under Variables, add `SYNC_ENABLED` = `true`. The workflow then runs every 10 minutes.
+
+The sync state is kept between runs in the Actions cache. Only one run happens at a time. To pause, set `SYNC_ENABLED` to `false`.
+
 ## Using it in HubSpot
 - **Lists / segments**: e.g. "Mixpanel: Signed up (first) is known AND Mixpanel: Onboarding completed (first) is unknown" finds people who signed up but never onboarded.
 - **Workflows**: trigger when `Mixpanel: Subscription started (first)` becomes known, then set the lifecycle stage to Customer and notify the owner.

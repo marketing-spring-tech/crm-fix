@@ -1,0 +1,79 @@
+name: Mixpanel → HubSpot sync
+
+on:
+  schedule:
+    - cron: "*/10 * * * *" # GitHub may delay or skip runs under load; the 2-day lookback catches up
+  workflow_dispatch:
+    inputs:
+      task:
+        description: What to run
+        type: choice
+        default: sync
+        options:
+          - setup-properties
+          - backfill-dry-run
+          - backfill
+          - sync
+      from:
+        description: Backfill start date (YYYY-MM-DD). Empty = 365 days ago
+        required: false
+
+# Only one run at a time: the sync state must not be written by two jobs.
+concurrency:
+  group: mixpanel-hubspot-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    # Scheduled runs stay off until the repository variable SYNC_ENABLED is "true".
+    if: github.event_name == 'workflow_dispatch' || vars.SYNC_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TASK: ${{ github.event_name == 'schedule' && 'sync' || inputs.task }}
+      FROM: ${{ inputs.from }}
+      HUBSPOT_ACCESS_TOKEN: ${{ secrets.HUBSPOT_ACCESS_TOKEN }}
+      MIXPANEL_SERVICE_ACCOUNT_USERNAME: ${{ secrets.MIXPANEL_SERVICE_ACCOUNT_USERNAME }}
+      MIXPANEL_SERVICE_ACCOUNT_SECRET: ${{ secrets.MIXPANEL_SERVICE_ACCOUNT_SECRET }}
+      MIXPANEL_REGION: ${{ secrets.MIXPANEL_REGION || vars.MIXPANEL_REGION || 'us' }}
+      MIXPANEL_PROJECT_ID: ${{ vars.MIXPANEL_PROJECT_ID || '4058092' }}
+      STATE_FILE: data/state.json
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # The state file records which events were already applied. GitHub caches are immutable,
+      # so restore the newest one by prefix and save a new one under this run's id.
+      - name: Restore sync state
+        if: env.TASK != 'setup-properties'
+        uses: actions/cache/restore@v4
+        with:
+          path: data
+          key: mixpanel-sync-state-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: mixpanel-sync-state-
+
+      - name: Run ${{ env.TASK }}
+        run: |
+          case "$TASK" in
+            setup-properties) node --import tsx src/scripts/setup-properties.ts ;;
+            backfill-dry-run) node --import tsx src/scripts/backfill.ts ${FROM:+--from "$FROM"} --dry-run ;;
+            backfill)         node --import tsx src/scripts/backfill.ts ${FROM:+--from "$FROM"} ;;
+            sync)             node --import tsx src/run.ts --once ;;
+            *) echo "unknown task $TASK"; exit 1 ;;
+          esac
+
+      - name: Save sync state
+        if: always() && (env.TASK == 'sync' || env.TASK == 'backfill')
+        uses: actions/cache/save@v4
+        with:
+          path: data
+          key: mixpanel-sync-state-${{ github.run_id }}-${{ github.run_attempt }}
