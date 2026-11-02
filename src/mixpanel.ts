@@ -96,10 +96,39 @@ export class MixpanelClient {
   }
 
   /**
-   * Streams raw events for the given names between two dates (inclusive, project timezone).
+   * Yields raw events for the given names between two dates (inclusive, project timezone).
+   * Mixpanel sometimes ends an export stream with a plain-text error (e.g. "terminated early") instead of
+   * JSON; such a range is split in half down to single days, so one bad day can't block the rest.
    * Export API rate limit: 60 requests/hour, 3/second.
    */
   async *exportEvents(eventNames: string[], from: Date, to: Date): AsyncGenerator<NormalizedEvent> {
+    let events: NormalizedEvent[];
+    try {
+      events = await this.exportRange(eventNames, from, to);
+    } catch (err) {
+      if (!(err instanceof ExportInterrupted)) throw err;
+      const days = Math.round((startOfDay(to) - startOfDay(from)) / DAY_MS);
+      console.error(err.message + (days >= 1 ? " (splitting range)" : ""));
+      if (days < 1) throw err;
+      const mid = new Date(startOfDay(from) + Math.floor(days / 2) * DAY_MS);
+      yield* this.exportEvents(eventNames, from, mid);
+      yield* this.exportEvents(eventNames, new Date(mid.getTime() + DAY_MS), to);
+      return;
+    }
+    yield* events;
+  }
+
+  private lastExportAt = 0;
+
+  private async exportRange(eventNames: string[], from: Date, to: Date): Promise<NormalizedEvent[]> {
+    // Stay under the Export API's 3 requests/second.
+    const wait = this.lastExportAt + 400 - Date.now();
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    this.lastExportAt = Date.now();
+    return this.fetchExport(eventNames, from, to);
+  }
+
+  private async fetchExport(eventNames: string[], from: Date, to: Date): Promise<NormalizedEvent[]> {
     const qs = new URLSearchParams({
       project_id: this.projectId,
       from_date: fmtDate(from),
@@ -107,20 +136,20 @@ export class MixpanelClient {
       event: JSON.stringify(eventNames),
     });
     const res = await this.call(`${this.hosts.data}/api/2.0/export?${qs}`);
-    if (!res.body) return;
-    const decoder = new TextDecoder();
-    let buf = "";
-    for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
-      buf += decoder.decode(chunk, { stream: true });
-      let nl: number;
-      while ((nl = buf.indexOf("\n")) >= 0) {
-        const line = buf.slice(0, nl).trim();
-        buf = buf.slice(nl + 1);
-        if (line) yield normalizeExportEvent(JSON.parse(line));
+    const out: NormalizedEvent[] = [];
+    const text = await res.text();
+    for (const raw of text.split("\n")) {
+      const line = raw.trim();
+      if (!line) continue;
+      if (!line.startsWith("{")) {
+        throw new ExportInterrupted(
+          `Mixpanel export ${qs.get("from_date")}..${qs.get("to_date")} interrupted: ${line.slice(0, 200)} ` +
+            `[status ${res.status}, ${out.length} events before it, request-id ${res.headers.get("x-request-id") ?? res.headers.get("request-id") ?? "n/a"}]`,
+        );
       }
+      out.push(normalizeExportEvent(JSON.parse(line)));
     }
-    buf += decoder.decode();
-    if (buf.trim()) yield normalizeExportEvent(JSON.parse(buf.trim()));
+    return out;
   }
 
   /** Looks up $email on People profiles. Returns distinct_id -> lowercase email for profiles that have one. */
@@ -162,3 +191,8 @@ export class MixpanelClient {
     return out;
   }
 }
+
+export class ExportInterrupted extends Error {}
+
+const DAY_MS = 86_400_000;
+const startOfDay = (d: Date) => Date.parse(fmtDate(d));

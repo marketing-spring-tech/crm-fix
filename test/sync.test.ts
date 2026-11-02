@@ -206,3 +206,28 @@ test("excluded (internal) events are skipped", async () => {
   assert.equal(s.excluded, 1);
   assert.equal(hs.store.size, 0);
 });
+
+test("export retries, then splits a range Mixpanel interrupts", async () => {
+  const ranges: string[] = [];
+  const fetchFn = (async (url: string) => {
+    const q = new URL(url).searchParams;
+    const range = `${q.get("from_date")}..${q.get("to_date")}`;
+    ranges.push(range);
+    // The 4-day range and its first half fail; single days succeed.
+    if (range === "2026-10-01..2026-10-04" || range === "2026-10-01..2026-10-02") return new Response("terminated early\n");
+    return new Response(JSON.stringify(raw("Sign Up", { $insert_id: range })) + "\n");
+  }) as unknown as typeof fetch;
+  const mp = new MixpanelClient("u", "s", "42", "us", fetchFn);
+  const ids = [];
+  for await (const ev of mp.exportEvents(["Sign Up"], new Date("2026-10-01"), new Date("2026-10-04"))) ids.push(ev.insertId);
+  assert.deepEqual(ids, ["2026-10-01..2026-10-01", "2026-10-02..2026-10-02", "2026-10-03..2026-10-04"]);
+  assert.equal(ranges.filter((r) => r === "2026-10-01..2026-10-04").length, 1);
+});
+
+test("export gives up on a single day that keeps failing", async () => {
+  const fetchFn = (async () => new Response("terminated early")) as unknown as typeof fetch;
+  const mp = new MixpanelClient("u", "s", "42", "us", fetchFn);
+  await assert.rejects(async () => {
+    for await (const _ of mp.exportEvents(["x"], new Date("2026-10-01"), new Date("2026-10-01"))) void _;
+  }, /interrupted: terminated early/);
+});
