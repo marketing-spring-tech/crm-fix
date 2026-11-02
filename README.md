@@ -36,6 +36,16 @@ The events are set in [`config/events.json`](config/events.json). It is configur
 
 ## Setup
 
+### 0. Send the user's email to Mixpanel (app change)
+Today Spring's Mixpanel profiles only have `email_domain`, so the app has to send the full email. Add one call wherever the app already calls `identify()` (login / sign-up / app start for a logged-in user):
+
+```js
+mixpanel.identify(user.id);
+mixpanel.people.set({ $email: user.email });
+```
+
+Setting it on the **profile** is enough. The sync looks up `$email` on the profile for each user ID, so it also covers events sent *before* the change: once a returning user's profile gets `$email`, a backfill matches all their past events. To make sign-up events match immediately, you can also add `email` as a property on `account_created`.
+
 ### 1. Credentials
 - **HubSpot**: go to Settings → Integrations → Private Apps → Create. Add these scopes: `crm.objects.contacts.read`, `crm.objects.contacts.write`, `crm.schemas.contacts.read`, `crm.schemas.contacts.write`.
 - **Mixpanel**: go to Organization Settings → Service Accounts. Create one with the Analyst role (or higher) on the project. Note the project ID and data region (US, EU or IN).
@@ -85,7 +95,7 @@ Mixpanel's Export API allows 60 requests per hour. One poll every 10 minutes use
 - **Reports**: use the Mixpanel properties in any contact report.
 
 ## Limitations
-- **Users need an email in Mixpanel.** In the Spring project today, profiles only carry `email_domain`, not a full email, so the app needs to send `$email` on the user profile (`mixpanel.people.set({ $email })`) or as an event property.
+- **Users need an email in Mixpanel** (see step 0). Until the app sends it, events can't be matched and are skipped. Re-run the backfill after the app change ships to pick them up.
 - Events are matched to contacts by email only. Anonymous events that are never tied to a profile with an email are skipped.
 - The Export API returns `distinct_id` exactly as it was sent. Events tracked before `identify()` keep the device ID, so they only match if the event carries `$user_id` or an email property.
 
