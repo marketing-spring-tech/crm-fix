@@ -72,10 +72,11 @@ export class MixpanelClient {
     username: string,
     secret: string,
     private readonly projectId: string,
-    region: Region = "us",
+    region: Region | string = "us",
     private readonly fetchFn: FetchFn = fetch,
   ) {
-    this.hosts = HOSTS[region];
+    // Accept "US", " eu ", etc.
+    this.hosts = HOSTS[String(region).trim().toLowerCase() as Region];
     if (!this.hosts) throw new Error(`unknown MIXPANEL_REGION ${region}`);
     this.auth = "Basic " + Buffer.from(`${username}:${secret}`).toString("base64");
   }

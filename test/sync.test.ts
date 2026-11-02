@@ -231,3 +231,14 @@ test("export gives up on a single day that keeps failing", async () => {
     for await (const _ of mp.exportEvents(["x"], new Date("2026-10-01"), new Date("2026-10-01"))) void _;
   }, /interrupted: terminated early/);
 });
+
+test("region is case- and whitespace-insensitive", async () => {
+  const urls: string[] = [];
+  const fetchFn = (async (url: string) => (urls.push(url), new Response(""))) as unknown as typeof fetch;
+  for (const r of ["US", " eu ", "In"]) {
+    const mp = new MixpanelClient("u", "s", "1", r, fetchFn);
+    for await (const _ of mp.exportEvents(["x"], new Date("2026-11-01"), new Date("2026-11-01"))) void _;
+  }
+  assert.deepEqual(urls.map((u) => new URL(u).host), ["data.mixpanel.com", "data-eu.mixpanel.com", "data-in.mixpanel.com"]);
+  assert.throws(() => new MixpanelClient("u", "s", "1", "mars"), /unknown MIXPANEL_REGION/);
+});
