@@ -1,0 +1,42 @@
+{
+  "$comment": "Map PostHog event names to HubSpot. Each event gets contact properties posthog_<key>_first_at, posthog_<key>_last_at and posthog_<key>_count. Set logNote=true to also drop a note on the contact timeline. setProperties are written verbatim on every occurrence. Edit this list to match your real PostHog event names, then re-run `npm run setup:hubspot`.",
+  "events": [
+    {
+      "posthogEvent": "user_signed_up",
+      "key": "signed_up",
+      "label": "Signed up",
+      "logNote": true
+    },
+    {
+      "posthogEvent": "onboarding_completed",
+      "key": "onboarding_completed",
+      "label": "Onboarding completed",
+      "logNote": true
+    },
+    {
+      "posthogEvent": "trial_started",
+      "key": "trial_started",
+      "label": "Trial started",
+      "logNote": true
+    },
+    {
+      "posthogEvent": "subscription_started",
+      "key": "subscription_started",
+      "label": "Subscription started",
+      "logNote": true
+    },
+    {
+      "posthogEvent": "subscription_cancelled",
+      "key": "subscription_cancelled",
+      "label": "Subscription cancelled",
+      "logNote": true
+    },
+    {
+      "posthogEvent": "invite_sent",
+      "key": "invite_sent",
+      "label": "Teammate invited",
+      "logNote": false
+    }
+  ],
+  "noteProperties": ["$current_url", "plan", "plan_name", "amount", "source"]
+}
