@@ -55,42 +55,56 @@ export class HubSpotClient {
     }
   }
 
-  /** Returns null when no contact has that email. */
-  async getContactByEmail(email: string, properties: string[]): Promise<Contact | null> {
-    const qs = new URLSearchParams({ idProperty: "email", properties: properties.join(",") });
-    try {
-      return await this.request<Contact>("GET", `/crm/v3/objects/contacts/${encodeURIComponent(email)}?${qs}`);
-    } catch (err) {
-      if (err instanceof HubSpotError && err.status === 404) return null;
-      throw err;
+  /** Reads contacts by email (any count; chunked by 100). Missing emails are simply absent from the map. */
+  async readContactsByEmail(emails: string[], properties: string[]): Promise<Map<string, Contact>> {
+    const out = new Map<string, Contact>();
+    for (const chunk of chunks(emails, 100)) {
+      const res = await this.request<{ results: Contact[] }>("POST", "/crm/v3/objects/contacts/batch/read", {
+        idProperty: "email",
+        properties: [...properties, "email"],
+        inputs: chunk.map((id) => ({ id })),
+      });
+      for (const c of res.results ?? []) {
+        const email = c.properties.email?.toLowerCase();
+        if (email) out.set(email, c);
+      }
     }
+    return out;
   }
 
-  /** Create-or-update contacts keyed on email (max 100 per call). */
+  /** Create-or-update contacts keyed on email (any count; chunked by 100). */
   async upsertContactsByEmail(
     inputs: { email: string; properties: Record<string, string> }[],
   ): Promise<Contact[]> {
-    if (inputs.length === 0) return [];
-    const res = await this.request<{ results: Contact[] }>("POST", "/crm/v3/objects/contacts/batch/upsert", {
-      inputs: inputs.map((i) => ({
-        idProperty: "email",
-        id: i.email,
-        properties: { ...i.properties, email: i.email },
-      })),
-    });
-    return res.results;
+    const out: Contact[] = [];
+    for (const chunk of chunks(inputs, 100)) {
+      const res = await this.request<{ results: Contact[] }>("POST", "/crm/v3/objects/contacts/batch/upsert", {
+        inputs: chunk.map((i) => ({
+          idProperty: "email",
+          id: i.email,
+          properties: { ...i.properties, email: i.email },
+        })),
+      });
+      out.push(...res.results);
+    }
+    return out;
   }
 
-  async createNoteOnContact(contactId: string, body: string, timestamp: string): Promise<void> {
-    await this.request("POST", "/crm/v3/objects/notes", {
-      properties: { hs_note_body: body, hs_timestamp: timestamp },
-      associations: [
-        {
-          to: { id: contactId },
-          types: [{ associationCategory: "HUBSPOT_DEFINED", associationTypeId: NOTE_TO_CONTACT_ASSOCIATION }],
-        },
-      ],
-    });
+  /** Creates timeline notes on contacts (chunked by 100). */
+  async createNotes(notes: { contactId: string; body: string; timestamp: string }[]): Promise<void> {
+    for (const chunk of chunks(notes, 100)) {
+      await this.request("POST", "/crm/v3/objects/notes/batch/create", {
+        inputs: chunk.map((n) => ({
+          properties: { hs_note_body: n.body, hs_timestamp: n.timestamp },
+          associations: [
+            {
+              to: { id: n.contactId },
+              types: [{ associationCategory: "HUBSPOT_DEFINED", associationTypeId: NOTE_TO_CONTACT_ASSOCIATION }],
+            },
+          ],
+        })),
+      });
+    }
   }
 
   /** Custom behavioral events (Marketing Hub Enterprise). */
@@ -129,4 +143,10 @@ export class HubSpotClient {
       throw err;
     }
   }
+}
+
+export function chunks<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
 }

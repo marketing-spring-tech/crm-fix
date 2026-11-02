@@ -1,70 +1,119 @@
 /**
- * Pulls historical per-person aggregates for every tracked event from PostHog and writes them to HubSpot.
- * Idempotent (takes min/max/max, never double-counts). Does not create timeline notes.
+ * Loads historical Mixpanel events into HubSpot (first/last/count per event). Idempotent: keeps the earliest
+ * first, latest last and larger count, so it can be re-run. Does not create timeline notes.
+ * Also marks recent events as processed in the poller's state so the live sync won't count them again.
  *
- *   npm run backfill                       # full history, creates missing contacts
- *   npm run backfill -- --since 2026-01-01 # only events since a date
- *   npm run backfill -- --existing-only    # never create contacts
- *   npm run backfill -- --dry-run
+ *   npm run backfill -- --from 2025-01-01            # default: 365 days ago
+ *   npm run backfill -- --from 2025-01-01 --dry-run
+ *   npm run backfill -- --existing-only              # never create contacts
  */
 import { loadEventsConfig, requireEnv } from "../config.ts";
 import { HubSpotClient } from "../hubspot.ts";
-import { PostHogClient, type AggregateRow } from "../posthog.ts";
-import { computeBackfillUpdate, trackedPropertyNames } from "../sync.ts";
+import { identityKeys, resolveEmail, type NormalizedEvent } from "../mixpanel.ts";
+import { exportRecent, mixpanelFromEnv } from "../run.ts";
+import { loadState, saveState } from "../state.ts";
+import { computeBackfillUpdate, eventKey, trackedPropertyNames, type AggregateRow } from "../sync.ts";
 
+const DAY = 86_400_000;
+const CHUNK_DAYS = 30;
 const args = process.argv.slice(2);
-const since = args.includes("--since") ? args[args.indexOf("--since") + 1] : undefined;
+const arg = (name: string) => (args.includes(name) ? args[args.indexOf(name) + 1] : undefined);
 const dryRun = args.includes("--dry-run");
 const existingOnly = args.includes("--existing-only");
+const now = new Date();
+const from = new Date(arg("--from") ?? new Date(now.getTime() - 365 * DAY).toISOString().slice(0, 10));
+if (Number.isNaN(from.getTime())) throw new Error("--from must be YYYY-MM-DD");
 
 const config = loadEventsConfig();
-const byEvent = new Map(config.events.map((m) => [m.posthogEvent, m]));
+const byEvent = new Map(config.events.map((m) => [m.mixpanelEvent, m]));
+const mixpanel = mixpanelFromEnv();
 const hubspot = new HubSpotClient(requireEnv("HUBSPOT_ACCESS_TOKEN"));
-const posthog = new PostHogClient(
-  process.env.POSTHOG_HOST ?? "https://us.posthog.com",
-  requireEnv("POSTHOG_PROJECT_ID"),
-  requireEnv("POSTHOG_PERSONAL_API_KEY"),
-);
-const props = trackedPropertyNames(config);
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const statePath = process.env.STATE_FILE ?? "data/state.json";
+const state = loadState(statePath);
+const recentCutoff = now.getTime() - (Number(process.env.LOOKBACK_DAYS ?? 2) + 2) * DAY;
 
-// Group rows by email so each contact gets a single write.
-const byEmail = new Map<string, AggregateRow[]>();
-for await (const page of posthog.aggregates([...byEvent.keys()], since)) {
-  for (const row of page) {
-    if (!EMAIL_RE.test(row.email)) continue;
-    byEmail.set(row.email, [...(byEmail.get(row.email) ?? []), row]);
+// 1. Aggregate per (identity, event). Keep one sample event per identity for email resolution.
+const agg = new Map<string, AggregateRow>();
+const sample = new Map<string, NormalizedEvent>();
+let total = 0;
+const recentKeys: [string, number][] = [];
+for (let start = from.getTime(); start <= now.getTime(); start += CHUNK_DAYS * DAY) {
+  const end = new Date(Math.min(start + (CHUNK_DAYS - 1) * DAY, now.getTime()));
+  const events = end.getTime() >= now.getTime() - DAY
+    ? await exportRecent(mixpanel, config, new Date(start), now)
+    : await collect(new Date(start), end);
+  for (const ev of events) {
+    if (!byEvent.has(ev.event)) continue;
+    total++;
+    const id = identityKeys(ev)[0] ?? "";
+    sample.set(id, ev);
+    const k = `${id}\u0000${ev.event}`;
+    const row = agg.get(k);
+    if (!row) agg.set(k, { email: id, event: ev.event, firstAt: ev.timestamp, lastAt: ev.timestamp, count: 1, distinctId: ev.distinctId });
+    else {
+      if (ev.timestamp < row.firstAt) row.firstAt = ev.timestamp;
+      if (ev.timestamp > row.lastAt) row.lastAt = ev.timestamp;
+      row.count++;
+    }
+    if (ev.processingTimeMs >= recentCutoff) recentKeys.push([eventKey(ev), ev.processingTimeMs]);
   }
+  console.log(`exported through ${end.toISOString().slice(0, 10)}: ${total} tracked events so far`);
 }
-console.log(`PostHog returned ${byEmail.size} people with tracked events`);
 
-let written = 0;
+async function collect(f: Date, t: Date) {
+  const out: NormalizedEvent[] = [];
+  for await (const ev of mixpanel.exportEvents([...byEvent.keys()], f, t)) out.push(ev);
+  return out;
+}
+
+// 2. Resolve identities to emails, then merge identities that share an email.
+const ids = [...sample.keys()].filter(Boolean);
+const profileEmails = await mixpanel.lookupEmails(ids.filter((id) => !state.emails[id]));
+for (const [id, email] of profileEmails) state.emails[id] = email;
+const emails = new Map(Object.entries(state.emails));
+const byEmail = new Map<string, Map<string, AggregateRow>>();
+let noEmail = 0;
+for (const row of agg.values()) {
+  const email = resolveEmail(sample.get(row.email)!, emails);
+  if (!email) {
+    noEmail += row.count;
+    continue;
+  }
+  const rows = byEmail.get(email) ?? new Map<string, AggregateRow>();
+  const prev = rows.get(row.event);
+  rows.set(row.event, prev
+    ? { ...prev, firstAt: prev.firstAt < row.firstAt ? prev.firstAt : row.firstAt, lastAt: prev.lastAt > row.lastAt ? prev.lastAt : row.lastAt, count: prev.count + row.count }
+    : { ...row, email });
+  byEmail.set(email, rows);
+}
+console.log(`${total} events, ${byEmail.size} people with an email, ${noEmail} events without an email skipped`);
+
+// 3. Merge with HubSpot and write.
+const existing = await hubspot.readContactsByEmail([...byEmail.keys()], trackedPropertyNames(config));
+const upserts: { email: string; properties: Record<string, string> }[] = [];
 let skipped = 0;
-let batch: { email: string; properties: Record<string, string> }[] = [];
-const flush = async () => {
-  if (!dryRun && batch.length) await hubspot.upsertContactsByEmail(batch);
-  written += batch.length;
-  batch = [];
-};
-
 for (const [email, rows] of byEmail) {
-  const contact = await hubspot.getContactByEmail(email, props);
+  const contact = existing.get(email);
   if (!contact && existingOnly) {
     skipped++;
     continue;
   }
-  // Sort by lastAt so the global "last tracked event" ends up on the most recent one.
-  rows.sort((a, b) => Date.parse(a.lastAt) - Date.parse(b.lastAt));
   let merged: Record<string, string | null> = { ...(contact?.properties ?? {}) };
   const update: Record<string, string> = {};
-  for (const row of rows) {
+  for (const row of [...rows.values()].sort((a, b) => a.lastAt.localeCompare(b.lastAt))) {
     const changes = computeBackfillUpdate(byEvent.get(row.event)!, merged, row);
     Object.assign(update, changes);
     merged = { ...merged, ...changes };
   }
-  if (dryRun) console.log(email, update);
-  batch.push({ email, properties: update });
-  if (batch.length === 100) await flush();
+  upserts.push({ email, properties: update });
 }
-await flush();
-console.log(`${dryRun ? "[dry run] would write" : "wrote"} ${written} contacts, skipped ${skipped} not in HubSpot`);
+
+if (dryRun) {
+  for (const u of upserts.slice(0, 20)) console.log(u.email, u.properties);
+  console.log(`[dry run] would write ${upserts.length} contacts (${skipped} skipped, not in HubSpot)`);
+} else {
+  await hubspot.upsertContactsByEmail(upserts);
+  for (const [k, t] of recentKeys) state.processed[k] = t;
+  saveState(statePath, state);
+  console.log(`wrote ${upserts.length} contacts (${skipped} skipped, not in HubSpot)`);
+}

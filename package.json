@@ -1,14 +1,17 @@
 {
-  "name": "posthog-hubspot-sync",
+  "name": "mixpanel-hubspot-sync",
   "version": "1.0.0",
   "private": true,
-  "description": "Streams key PostHog product events into HubSpot contacts (properties + timeline notes).",
+  "description": "Syncs key Mixpanel product events into HubSpot contacts (properties + timeline notes).",
   "type": "module",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
-    "start": "tsx src/server.ts",
-    "setup:hubspot": "tsx src/scripts/setup-properties.ts",
-    "backfill": "tsx src/scripts/backfill.ts",
+    "start": "node --import tsx src/run.ts",
+    "sync:once": "node --import tsx src/run.ts --once",
+    "setup:hubspot": "node --import tsx src/scripts/setup-properties.ts",
+    "backfill": "node --import tsx src/scripts/backfill.ts",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test test/*.test.ts"
   },

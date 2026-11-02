@@ -1,42 +1,12 @@
 {
-  "$comment": "Map PostHog event names to HubSpot. Each event gets contact properties posthog_<key>_first_at, posthog_<key>_last_at and posthog_<key>_count. Set logNote=true to also drop a note on the contact timeline. setProperties are written verbatim on every occurrence. Edit this list to match your real PostHog event names, then re-run `npm run setup:hubspot`.",
+  "$comment": "Map Mixpanel event names to HubSpot. Each event gets contact properties mixpanel_<key>_first_at, mixpanel_<key>_last_at and mixpanel_<key>_count. logNote=true also drops a note on the contact timeline. setProperties are written verbatim on every occurrence. Replace these placeholders with your real Mixpanel event names, then re-run the setup script.",
   "events": [
-    {
-      "posthogEvent": "user_signed_up",
-      "key": "signed_up",
-      "label": "Signed up",
-      "logNote": true
-    },
-    {
-      "posthogEvent": "onboarding_completed",
-      "key": "onboarding_completed",
-      "label": "Onboarding completed",
-      "logNote": true
-    },
-    {
-      "posthogEvent": "trial_started",
-      "key": "trial_started",
-      "label": "Trial started",
-      "logNote": true
-    },
-    {
-      "posthogEvent": "subscription_started",
-      "key": "subscription_started",
-      "label": "Subscription started",
-      "logNote": true
-    },
-    {
-      "posthogEvent": "subscription_cancelled",
-      "key": "subscription_cancelled",
-      "label": "Subscription cancelled",
-      "logNote": true
-    },
-    {
-      "posthogEvent": "invite_sent",
-      "key": "invite_sent",
-      "label": "Teammate invited",
-      "logNote": false
-    }
+    { "mixpanelEvent": "Sign Up", "key": "signed_up", "label": "Signed up", "logNote": true },
+    { "mixpanelEvent": "Onboarding Completed", "key": "onboarding_completed", "label": "Onboarding completed", "logNote": true },
+    { "mixpanelEvent": "Trial Started", "key": "trial_started", "label": "Trial started", "logNote": true },
+    { "mixpanelEvent": "Subscription Started", "key": "subscription_started", "label": "Subscription started", "logNote": true },
+    { "mixpanelEvent": "Subscription Cancelled", "key": "subscription_cancelled", "label": "Subscription cancelled", "logNote": true },
+    { "mixpanelEvent": "Invite Sent", "key": "invite_sent", "label": "Teammate invited", "logNote": false }
   ],
-  "noteProperties": ["$current_url", "plan", "plan_name", "amount", "source"]
+  "noteProperties": ["plan", "plan_name", "amount", "$current_url", "utm_source"]
 }
