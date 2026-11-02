@@ -11,7 +11,15 @@ type Def = Parameters<HubSpotClient["ensureProperty"]>[0];
 const defs: Def[] = [
   { name: GLOBAL_PROPERTIES.lastActiveAt, label: "Mixpanel: last tracked event at", type: "datetime", fieldType: "date", groupName: PROPERTY_GROUP },
   { name: GLOBAL_PROPERTIES.lastEvent, label: "Mixpanel: last tracked event", type: "string", fieldType: "text", groupName: PROPERTY_GROUP },
-  { name: GLOBAL_PROPERTIES.distinctId, label: "Mixpanel: distinct ID", type: "string", fieldType: "text", groupName: PROPERTY_GROUP },
+  {
+    name: GLOBAL_PROPERTIES.userId,
+    label: "Mixpanel: user ID",
+    type: "string",
+    fieldType: "text",
+    groupName: PROPERTY_GROUP,
+    hasUniqueValue: true,
+    description: "Mixpanel user ID ($user_id) for this contact. Used to match Mixpanel events. Set by the sign-up flow / link script.",
+  },
 ];
 for (const m of config.events) {
   const p = propertyNames(m);

@@ -19,12 +19,6 @@ const HOSTS: Record<Region, { data: string; query: string }> = {
   in: { data: "https://data-in.mixpanel.com", query: "https://in.mixpanel.com" },
 };
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-export function isEmail(v: unknown): v is string {
-  return typeof v === "string" && EMAIL_RE.test(v.trim());
-}
-
 /** Converts one line of Mixpanel's raw export into a NormalizedEvent. */
 export function normalizeExportEvent(raw: unknown): NormalizedEvent {
   const obj = raw as { event?: unknown; properties?: Record<string, unknown> };
@@ -44,20 +38,13 @@ export function normalizeExportEvent(raw: unknown): NormalizedEvent {
   };
 }
 
-/** Identity keys to look up in People profiles, most specific first. */
-export function identityKeys(ev: NormalizedEvent): string[] {
-  const keys = [ev.properties.$user_id, ev.distinctId].filter((v): v is string => typeof v === "string" && v !== "");
-  return [...new Set(keys)];
-}
-
-/** Email from the event itself (property or an email-shaped id), else from the People profile lookup. */
-export function resolveEmail(ev: NormalizedEvent, profileEmails: Map<string, string>): string | undefined {
-  const p = ev.properties;
-  for (const c of [p.$email, p.email, p.Email]) if (isEmail(c)) return c.trim().toLowerCase();
-  for (const id of identityKeys(ev)) {
-    const fromProfile = profileEmails.get(id);
-    if (fromProfile) return fromProfile;
-    if (isEmail(id)) return id.trim().toLowerCase();
+/**
+ * The Mixpanel user ID used to match HubSpot contacts: $user_id if present, else distinct_id,
+ * ignoring anonymous device IDs ("$device:...").
+ */
+export function userIdOf(ev: NormalizedEvent): string | undefined {
+  for (const v of [ev.properties.$user_id, ev.distinctId]) {
+    if (typeof v === "string" && v !== "" && !v.startsWith("$device:")) return v;
   }
   return undefined;
 }
@@ -121,44 +108,5 @@ export class MixpanelClient {
     }
     buf += decoder.decode();
     if (buf.trim()) yield normalizeExportEvent(JSON.parse(buf.trim()));
-  }
-
-  /** Looks up $email on People profiles. Returns distinct_id -> lowercase email for profiles that have one. */
-  async lookupEmails(distinctIds: string[]): Promise<Map<string, string>> {
-    const out = new Map<string, string>();
-    for (let i = 0; i < distinctIds.length; i += 1000) {
-      const ids = distinctIds.slice(i, i + 1000);
-      let page = 0;
-      let sessionId: string | undefined;
-      for (;;) {
-        const form = new URLSearchParams({
-          distinct_ids: JSON.stringify(ids),
-          output_properties: JSON.stringify(["$email", "email"]),
-        });
-        if (sessionId) {
-          form.set("session_id", sessionId);
-          form.set("page", String(page));
-        }
-        const res = await this.call(`${this.hosts.query}/api/2.0/engage?project_id=${this.projectId}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: form.toString(),
-        });
-        const json = (await res.json()) as {
-          results?: { $distinct_id: string; $properties?: Record<string, unknown> }[];
-          session_id?: string;
-          page_size?: number;
-        };
-        const results = json.results ?? [];
-        for (const r of results) {
-          const email = [r.$properties?.$email, r.$properties?.email].find(isEmail);
-          if (email) out.set(String(r.$distinct_id), email.trim().toLowerCase());
-        }
-        if (!json.session_id || results.length < (json.page_size ?? 1000)) break;
-        sessionId = json.session_id;
-        page++;
-      }
-    }
-    return out;
   }
 }

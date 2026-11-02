@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseEventsConfig, propertyNames, sanitizeKey, type EventsConfig } from "../src/config.ts";
 import { HubSpotClient } from "../src/hubspot.ts";
-import { MixpanelClient, normalizeExportEvent, resolveEmail } from "../src/mixpanel.ts";
+import { parseUsersCsv } from "../src/csv.ts";
+import { MixpanelClient, normalizeExportEvent, userIdOf } from "../src/mixpanel.ts";
 import { emptyState, pruneState } from "../src/state.ts";
 import { buildNoteBody, computeBackfillUpdate, computeEventUpdate, syncEvents, DEFAULT_OPTIONS } from "../src/sync.ts";
 
@@ -43,35 +44,33 @@ test("config validation and key sanitizing", () => {
   assert.throws(() => parseEventsConfig({ events: [signup, { ...signup, mixpanelEvent: "other" }] }), /duplicate key/);
 });
 
-test("normalizes Mixpanel export rows and resolves email", () => {
+test("normalizes Mixpanel export rows and picks the user ID", () => {
   const ev = normalizeExportEvent(raw("Sign Up"));
   assert.equal(ev.timestamp, "2026-11-02T11:20:00.000Z");
   assert.equal(ev.processingTimeMs, NOW - 3_600_000);
-  assert.equal(resolveEmail(ev, new Map([["user-1", "jane@example.com"]])), "jane@example.com");
-  assert.equal(resolveEmail(ev, new Map()), undefined);
-  assert.equal(resolveEmail(normalizeExportEvent(raw("x", { $email: "A@B.io" })), new Map()), "a@b.io");
-  assert.equal(resolveEmail(normalizeExportEvent(raw("x", { distinct_id: "c@d.io" })), new Map()), "c@d.io");
-  assert.equal(
-    resolveEmail(normalizeExportEvent(raw("x", { $user_id: "u-9", distinct_id: "$device:1" })), new Map([["u-9", "u9@x.io"]])),
-    "u9@x.io",
-  );
+  assert.equal(userIdOf(ev), "user-1");
+  assert.equal(userIdOf(normalizeExportEvent(raw("x", { $user_id: "u-9", distinct_id: "$device:1" }))), "u-9");
+  assert.equal(userIdOf(normalizeExportEvent(raw("x", { distinct_id: "$device:1" }))), undefined);
   assert.throws(() => normalizeExportEvent({ event: "x", properties: {} }));
 });
 
+test("parses the users CSV", () => {
+  assert.deepEqual(parseUsersCsv('"Email",user_id,name\nJane@X.io,u-1,Jane\nbad,u-2,\nb@y.io,,\n'), [{ email: "jane@x.io", userId: "u-1" }]);
+  assert.throws(() => parseUsersCsv("email\na@b.io"));
+});
+
 test("live update keeps earliest first, latest last, increments count", () => {
-  const ev = { timestamp: "2026-10-01T12:00:00.000Z", distinctId: "abc" };
+  const ev = { timestamp: "2026-10-01T12:00:00.000Z" };
   const fresh = computeEventUpdate(signup, {}, ev);
   assert.equal(fresh[P.firstAt], ev.timestamp);
   assert.equal(fresh[P.count], "1");
   assert.equal(fresh.mixpanel_last_tracked_event, "Signed up");
-  assert.equal(fresh.mixpanel_distinct_id, "abc");
 
   const older = computeEventUpdate(signup, {
     [P.firstAt]: "2026-09-01T00:00:00.000Z",
     [P.lastAt]: "2026-11-01T00:00:00.000Z",
     [P.count]: "4",
     mixpanel_last_tracked_event_at: "2026-11-01T00:00:00.000Z",
-    mixpanel_distinct_id: "abc",
   }, ev);
   assert.equal(older[P.firstAt], "2026-09-01T00:00:00.000Z");
   assert.equal(older[P.lastAt], "2026-11-01T00:00:00.000Z");
@@ -81,7 +80,7 @@ test("live update keeps earliest first, latest last, increments count", () => {
 });
 
 test("backfill update is idempotent", () => {
-  const row = { email: "a@b.io", event: "Sign Up", firstAt: "2026-01-01T00:00:00.000Z", lastAt: "2026-02-01T00:00:00.000Z", count: 3 };
+  const row = { userId: "u", event: "Sign Up", firstAt: "2026-01-01T00:00:00.000Z", lastAt: "2026-02-01T00:00:00.000Z", count: 3 };
   const once = computeBackfillUpdate(signup, {}, row);
   assert.deepEqual(computeBackfillUpdate(signup, once, row), once);
 });
@@ -90,74 +89,74 @@ test("note body escapes HTML", () => {
   assert.match(buildNoteBody(signup, normalizeExportEvent(raw("Sign Up")), config.noteProperties), /plan: pro &lt;b&gt;/);
 });
 
-function fakeHubSpot() {
+function fakeHubSpot(linked: Record<string, string> = { "user-1": "101" }) {
   const calls: { url: string; body: any }[] = [];
-  const store = new Map<string, Record<string, string>>();
+  const store = new Map<string, Record<string, string>>(Object.values(linked).map((id) => [id, {}]));
+  const idByUser = new Map(Object.entries(linked));
   const fetchFn = (async (url: string, init: RequestInit) => {
     const body = init.body ? JSON.parse(String(init.body)) : undefined;
     calls.push({ url, body });
     const json = (data: unknown) => new Response(JSON.stringify(data), { status: 200 });
     if (url.endsWith("/batch/read")) {
+      assert.equal(body.idProperty, "mixpanel_user_id");
       return json({
-        results: body.inputs.filter((i: any) => store.has(i.id)).map((i: any) => ({ id: "c-" + i.id, properties: { ...store.get(i.id), email: i.id } })),
+        results: body.inputs
+          .filter((i: any) => idByUser.has(i.id))
+          .map((i: any) => ({ id: idByUser.get(i.id), properties: { ...store.get(idByUser.get(i.id)!), mixpanel_user_id: i.id } })),
       });
     }
-    if (url.endsWith("/batch/upsert")) {
-      return json({
-        results: body.inputs.map((i: any) => {
-          store.set(i.id, { ...(store.get(i.id) ?? {}), ...i.properties });
-          return { id: "c-" + i.id, properties: store.get(i.id) };
-        }),
-      });
+    if (url.endsWith("/contacts/batch/update")) {
+      for (const i of body.inputs) store.set(i.id, { ...store.get(i.id), ...i.properties });
+      return json({ results: [] });
     }
     return json({});
   }) as typeof fetch;
   return { client: new HubSpotClient("tok", fetchFn), calls, store };
 }
 
-const lookup = async (ids: string[]) => new Map(ids.filter((i) => i === "user-1").map((i) => [i, "jane@example.com"]));
-
-test("syncEvents writes contacts + notes and never double counts overlapping polls", async () => {
+test("syncEvents updates linked contacts + notes and never double counts overlapping polls", async () => {
   const hs = fakeHubSpot();
   const state = emptyState();
   const events = [raw("Sign Up"), raw("Invite Sent"), raw("Invite Sent", { time: Date.parse("2026-11-02T11:21:40Z") / 1000 }), raw("Page View")].map(normalizeExportEvent);
 
-  const s1 = await syncEvents(events, config, hs.client, state, lookup, DEFAULT_OPTIONS, NOW);
+  const s1 = await syncEvents(events, config, hs.client, state, DEFAULT_OPTIONS, NOW);
   assert.equal(s1.synced, 3);
   assert.equal(s1.contacts, 1);
   assert.equal(s1.notes, 1);
-  const c = hs.store.get("jane@example.com")!;
+  const c = hs.store.get("101")!;
   assert.equal(c[P.count], "1");
   assert.equal(c.mixpanel_invite_sent_count, "2");
   assert.equal(c.mixpanel_last_tracked_event, "Teammate invited");
+  assert.equal(c.is_team_user, "true");
   const note = hs.calls.find((x) => x.url.endsWith("/notes/batch/create"))!;
-  assert.equal(note.body.inputs[0].associations[0].to.id, "c-jane@example.com");
-  assert.equal(state.emails["user-1"], "jane@example.com");
+  assert.equal(note.body.inputs[0].associations[0].to.id, "101");
 
   // Next poll re-exports the same window plus one new event.
-  const s2 = await syncEvents([...events, normalizeExportEvent(raw("Sign Up"))], config, hs.client, state, lookup, DEFAULT_OPTIONS, NOW);
+  const s2 = await syncEvents([...events, normalizeExportEvent(raw("Sign Up"))], config, hs.client, state, DEFAULT_OPTIONS, NOW);
   assert.equal(s2.synced, 1);
-  assert.equal(hs.store.get("jane@example.com")![P.count], "2");
-  assert.equal(hs.store.get("jane@example.com")!.mixpanel_invite_sent_count, "2");
+  assert.equal(hs.store.get("101")![P.count], "2");
+  assert.equal(hs.store.get("101")!.mixpanel_invite_sent_count, "2");
 });
 
-test("events without email are deferred during the grace period, then dropped", async () => {
+test("unlinked users are retried during the grace period, then dropped; anonymous events dropped", async () => {
   const hs = fakeHubSpot();
   const state = emptyState();
-  const anon = normalizeExportEvent(raw("Sign Up", { distinct_id: "anon", mp_processing_time_ms: NOW - 60_000 }));
-  const s1 = await syncEvents([anon], config, hs.client, state, lookup, DEFAULT_OPTIONS, NOW);
-  assert.equal(s1.deferredNoEmail, 1);
-  assert.equal(Object.keys(state.processed).length, 0);
-  const s2 = await syncEvents([anon], config, hs.client, state, lookup, DEFAULT_OPTIONS, NOW + 3_600_000);
-  assert.equal(s2.droppedNoEmail, 1);
+  const unlinked = normalizeExportEvent(raw("Sign Up", { distinct_id: "user-2", mp_processing_time_ms: NOW - 60_000 }));
+  const anon = normalizeExportEvent(raw("Sign Up", { distinct_id: "$device:x" }));
+  const s1 = await syncEvents([unlinked, anon], config, hs.client, state, DEFAULT_OPTIONS, NOW);
+  assert.equal(s1.deferredNoContact, 1);
+  assert.equal(s1.anonymous, 1);
   assert.equal(Object.keys(state.processed).length, 1);
+  const s2 = await syncEvents([unlinked], config, hs.client, state, DEFAULT_OPTIONS, NOW + 2 * 3_600_000);
+  assert.equal(s2.droppedNoContact, 1);
+  assert.equal(hs.store.get("101")![P.count], undefined);
 });
 
-test("createContacts=false skips unknown contacts", async () => {
+test("excluded (internal) events are skipped", async () => {
   const hs = fakeHubSpot();
-  const s = await syncEvents([normalizeExportEvent(raw("Sign Up"))], config, hs.client, emptyState(), lookup, { ...DEFAULT_OPTIONS, createContacts: false }, NOW);
-  assert.equal(s.droppedNoContact, 1);
-  assert.equal(hs.store.size, 0);
+  const s = await syncEvents([normalizeExportEvent(raw("Sign Up", { is_internal: true }))], config, hs.client, emptyState(), DEFAULT_OPTIONS, NOW);
+  assert.equal(s.excluded, 1);
+  assert.equal(hs.calls.length, 0);
 });
 
 test("pruneState drops old keys only", () => {
@@ -167,7 +166,7 @@ test("pruneState drops old keys only", () => {
   assert.deepEqual(Object.keys(s.processed), ["recent"]);
 });
 
-test("Mixpanel client streams JSONL export and pages engage lookups", async () => {
+test("Mixpanel client streams JSONL export", async () => {
   const urls: string[] = [];
   const fetchFn = (async (url: string, init: RequestInit) => {
     urls.push(url);
@@ -190,8 +189,6 @@ test("Mixpanel client streams JSONL export and pages engage lookups", async () =
   for await (const ev of mp.exportEvents(["Sign Up"], new Date("2026-11-01"), new Date("2026-11-02"))) out.push(ev);
   assert.equal(out.length, 2);
   assert.match(urls[0]!, /^https:\/\/data-eu\.mixpanel\.com\/api\/2\.0\/export\?project_id=42&from_date=2026-11-01&to_date=2026-11-02/);
-  assert.deepEqual([...(await mp.lookupEmails(["user-1"]))], [["user-1", "jane@example.com"]]);
-  assert.match(urls[1]!, /^https:\/\/eu\.mixpanel\.com\/api\/2\.0\/engage\?project_id=42/);
 });
 
 test("HubSpot client retries 429", async () => {
@@ -200,9 +197,3 @@ test("HubSpot client retries 429", async () => {
   assert.equal((await new HubSpotClient("t", fetchFn).request<{ ok: number }>("GET", "/x")).ok, 1);
 });
 
-test("excluded (internal) events are skipped", async () => {
-  const hs = fakeHubSpot();
-  const s = await syncEvents([normalizeExportEvent(raw("Sign Up", { is_internal: true }))], config, hs.client, emptyState(), lookup, DEFAULT_OPTIONS, NOW);
-  assert.equal(s.excluded, 1);
-  assert.equal(hs.store.size, 0);
-});

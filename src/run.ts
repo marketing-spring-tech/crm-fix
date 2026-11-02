@@ -47,7 +47,7 @@ async function pollOnce(config: EventsConfig, mixpanel: MixpanelClient, hubspot:
   const state = loadState(statePath);
   const events = await exportRecent(mixpanel, config, new Date(now.getTime() - lookbackDays * DAY), now);
   try {
-    const stats = await syncEvents(events, config, hubspot, state, (ids) => mixpanel.lookupEmails(ids), options);
+    const stats = await syncEvents(events, config, hubspot, state, options);
     console.log(JSON.stringify({ level: "info", at: now.toISOString(), ...stats }));
   } finally {
     // Persist progress even on failure so already-written events are never re-counted.
@@ -62,9 +62,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const mixpanel = mixpanelFromEnv();
   const hubspot = new HubSpotClient(requireEnv("HUBSPOT_ACCESS_TOKEN"));
   const options: SyncOptions = {
-    createContacts: process.env.CREATE_CONTACTS !== "false",
     customEvents: process.env.HUBSPOT_CUSTOM_EVENTS === "true",
-    emailGraceMs: Number(process.env.EMAIL_GRACE_MINUTES ?? 30) * 60_000,
+    matchGraceMs: Number(process.env.MATCH_GRACE_MINUTES ?? 60) * 60_000,
   };
   const intervalMs = Math.max(1, Number(process.env.POLL_INTERVAL_MINUTES ?? 10)) * 60_000;
   console.log(`mixpanel-hubspot-sync tracking: ${config.events.map((e) => e.mixpanelEvent).join(", ")}`);

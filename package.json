@@ -13,7 +13,8 @@
     "setup:hubspot": "node --import tsx src/scripts/setup-properties.ts",
     "backfill": "node --import tsx src/scripts/backfill.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test test/*.test.ts"
+    "test": "node --import tsx --test test/*.test.ts",
+    "link-users": "node --import tsx src/scripts/link-users.ts"
   },
   "dependencies": {
     "tsx": "^4.20.0"

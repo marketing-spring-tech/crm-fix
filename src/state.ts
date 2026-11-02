@@ -4,19 +4,17 @@ import { dirname } from "node:path";
 export interface SyncState {
   /** event key ($insert_id) -> Mixpanel processing time (ms) for every event already applied */
   processed: Record<string, number>;
-  /** Mixpanel identity (distinct_id / $user_id) -> email */
-  emails: Record<string, string>;
   lastRunAt?: string;
 }
 
 export function emptyState(): SyncState {
-  return { processed: {}, emails: {} };
+  return { processed: {} };
 }
 
 export function loadState(path: string): SyncState {
   try {
     const s = JSON.parse(readFileSync(path, "utf8")) as Partial<SyncState>;
-    return { processed: s.processed ?? {}, emails: s.emails ?? {}, lastRunAt: s.lastRunAt };
+    return { processed: s.processed ?? {}, lastRunAt: s.lastRunAt };
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return emptyState();
     throw err;
