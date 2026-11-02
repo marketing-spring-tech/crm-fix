@@ -55,31 +55,21 @@ export class HubSpotClient {
     }
   }
 
-  /**
-   * Reads contacts by a unique property (e.g. email or mixpanel_user_id), chunked by 100.
-   * Returns a map keyed by that property's value; ids with no contact are absent.
-   */
-  async readContactsBy(idProperty: string, ids: string[], properties: string[]): Promise<Map<string, Contact>> {
+  /** Reads contacts by email (any count; chunked by 100). Missing emails are simply absent from the map. */
+  async readContactsByEmail(emails: string[], properties: string[]): Promise<Map<string, Contact>> {
     const out = new Map<string, Contact>();
-    for (const chunk of chunks(ids, 100)) {
+    for (const chunk of chunks(emails, 100)) {
       const res = await this.request<{ results: Contact[] }>("POST", "/crm/v3/objects/contacts/batch/read", {
-        idProperty,
-        properties: [...properties, idProperty],
+        idProperty: "email",
+        properties: [...properties, "email"],
         inputs: chunk.map((id) => ({ id })),
       });
       for (const c of res.results ?? []) {
-        const key = c.properties[idProperty];
-        if (key) out.set(idProperty === "email" ? key.toLowerCase() : key, c);
+        const email = c.properties.email?.toLowerCase();
+        if (email) out.set(email, c);
       }
     }
     return out;
-  }
-
-  /** Updates contacts by HubSpot record id, chunked by 100. */
-  async updateContacts(inputs: { id: string; properties: Record<string, string> }[]): Promise<void> {
-    for (const chunk of chunks(inputs, 100)) {
-      await this.request("POST", "/crm/v3/objects/contacts/batch/update", { inputs: chunk });
-    }
   }
 
   /** Create-or-update contacts keyed on email (any count; chunked by 100). */
@@ -118,8 +108,13 @@ export class HubSpotClient {
   }
 
   /** Custom behavioral events (Marketing Hub Enterprise). */
-  async sendCustomEvent(eventName: string, contactId: string, occurredAt: string): Promise<void> {
-    await this.request("POST", "/events/v3/send", { eventName, objectId: contactId, occurredAt, properties: {} });
+  async sendCustomEvent(
+    eventName: string,
+    email: string,
+    occurredAt: string,
+    properties: Record<string, string>,
+  ): Promise<void> {
+    await this.request("POST", "/events/v3/send", { eventName, email, occurredAt, properties });
   }
 
   async ensurePropertyGroup(name: string, label: string): Promise<"created" | "exists"> {
@@ -139,7 +134,6 @@ export class HubSpotClient {
     fieldType: "date" | "number" | "text";
     groupName: string;
     description?: string;
-    hasUniqueValue?: boolean;
   }): Promise<"created" | "exists"> {
     try {
       await this.request("POST", "/crm/v3/properties/contacts", def);

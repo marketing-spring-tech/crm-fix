@@ -50,8 +50,7 @@ export function propertyNames(m: EventMapping) {
 export const GLOBAL_PROPERTIES = {
   lastActiveAt: `${PROPERTY_PREFIX}last_tracked_event_at`,
   lastEvent: `${PROPERTY_PREFIX}last_tracked_event`,
-  /** Match key: the Mixpanel user ID ($user_id / distinct_id). Unique-value property in HubSpot. */
-  userId: `${PROPERTY_PREFIX}user_id`,
+  distinctId: `${PROPERTY_PREFIX}distinct_id`,
 } as const;
 
 export function parseEventsConfig(raw: unknown): EventsConfig {
