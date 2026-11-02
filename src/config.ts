@@ -19,6 +19,12 @@ export interface EventsConfig {
   events: EventMapping[];
   /** Mixpanel event properties copied into the timeline note body */
   noteProperties: string[];
+  /** Skip events whose property matches any listed value, e.g. { "is_internal": [true] } */
+  exclude: Record<string, unknown[]>;
+}
+
+export function isExcluded(config: EventsConfig, properties: Record<string, unknown>): boolean {
+  return Object.entries(config.exclude).some(([k, values]) => values.some((v) => properties[k] === v));
 }
 
 export const PROPERTY_GROUP = "mixpanel";
@@ -67,7 +73,7 @@ export function parseEventsConfig(raw: unknown): EventsConfig {
     seenEvents.add(e.mixpanelEvent);
     seenKeys.add(k);
   }
-  return { events: obj.events, noteProperties: obj.noteProperties ?? [] };
+  return { events: obj.events, noteProperties: obj.noteProperties ?? [], exclude: obj.exclude ?? {} };
 }
 
 export function loadEventsConfig(path = process.env.EVENTS_CONFIG ?? "config/events.json"): EventsConfig {

@@ -7,7 +7,7 @@
  *   npm run backfill -- --from 2025-01-01 --dry-run
  *   npm run backfill -- --existing-only              # never create contacts
  */
-import { loadEventsConfig, requireEnv } from "../config.ts";
+import { isExcluded, loadEventsConfig, requireEnv } from "../config.ts";
 import { HubSpotClient } from "../hubspot.ts";
 import { identityKeys, resolveEmail, type NormalizedEvent } from "../mixpanel.ts";
 import { exportRecent, mixpanelFromEnv } from "../run.ts";
@@ -43,7 +43,7 @@ for (let start = from.getTime(); start <= now.getTime(); start += CHUNK_DAYS * D
     ? await exportRecent(mixpanel, config, new Date(start), now)
     : await collect(new Date(start), end);
   for (const ev of events) {
-    if (!byEvent.has(ev.event)) continue;
+    if (!byEvent.has(ev.event) || isExcluded(config, ev.properties)) continue;
     total++;
     const id = identityKeys(ev)[0] ?? "";
     sample.set(id, ev);

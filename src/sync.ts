@@ -1,4 +1,4 @@
-import { GLOBAL_PROPERTIES, propertyNames, type EventMapping, type EventsConfig } from "./config.ts";
+import { GLOBAL_PROPERTIES, isExcluded, propertyNames, type EventMapping, type EventsConfig } from "./config.ts";
 import { chunks, type HubSpotClient } from "./hubspot.ts";
 import { identityKeys, resolveEmail, type NormalizedEvent } from "./mixpanel.ts";
 import type { SyncState } from "./state.ts";
@@ -25,6 +25,7 @@ export interface AggregateRow {
 
 export interface SyncStats {
   seen: number;
+  excluded: number;
   alreadyProcessed: number;
   synced: number;
   contacts: number;
@@ -130,7 +131,7 @@ export async function syncEvents(
 ): Promise<SyncStats> {
   const byEvent = new Map(config.events.map((m) => [m.mixpanelEvent, m]));
   const stats: SyncStats = {
-    seen: events.length, alreadyProcessed: 0, synced: 0, contacts: 0, notes: 0,
+    seen: events.length, excluded: 0, alreadyProcessed: 0, synced: 0, contacts: 0, notes: 0,
     deferredNoEmail: 0, droppedNoEmail: 0, droppedNoContact: 0,
   };
 
@@ -138,6 +139,10 @@ export async function syncEvents(
   const batchKeys = new Set<string>();
   for (const ev of events) {
     const key = eventKey(ev);
+    if (byEvent.has(ev.event) && isExcluded(config, ev.properties)) {
+      stats.excluded++;
+      continue;
+    }
     if (!byEvent.has(ev.event) || state.processed[key] !== undefined || batchKeys.has(key)) {
       stats.alreadyProcessed++;
       continue;

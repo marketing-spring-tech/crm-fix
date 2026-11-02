@@ -21,7 +21,7 @@ All properties go in a **Mixpanel** property group on the contact record. Expect
 
 ## Which events
 
-The events are set in [`config/events.json`](config/events.json). **The defaults are placeholders.** Replace them with your real Mixpanel event names (Data Management → Lexicon):
+The events are set in [`config/events.json`](config/events.json). It is configured for the Mixpanel project **Spring (4058092)** and covers 17 events: install and sign-up, onboarding and first result, usage (app/project opens, prompts, changes kept), integrations (GitHub, connectors, merged PRs), sharing, team invites, and `credit_cap_reached` as an upgrade signal. Internal users (`is_internal`) and `dev` builds are excluded.
 
 | field | meaning |
 |---|---|
@@ -32,7 +32,7 @@ The events are set in [`config/events.json`](config/events.json). **The defaults
 | `setProperties` | optional static contact properties to set, e.g. `{"customer_type": "self_serve"}` |
 | `hubspotEventName` | optional HubSpot custom behavioral event name. Only used when `HUBSPOT_CUSTOM_EVENTS=true`, which needs Marketing Hub Enterprise. |
 
-`noteProperties` lists the Mixpanel event properties to copy into the note text.
+`noteProperties` lists the Mixpanel event properties to copy into the note text. `exclude` skips any event whose property matches one of the listed values, e.g. `{"is_internal": [true]}`.
 
 ## Setup
 
@@ -85,6 +85,7 @@ Mixpanel's Export API allows 60 requests per hour. One poll every 10 minutes use
 - **Reports**: use the Mixpanel properties in any contact report.
 
 ## Limitations
+- **Users need an email in Mixpanel.** In the Spring project today, profiles only carry `email_domain`, not a full email, so the app needs to send `$email` on the user profile (`mixpanel.people.set({ $email })`) or as an event property.
 - Events are matched to contacts by email only. Anonymous events that are never tied to a profile with an email are skipped.
 - The Export API returns `distinct_id` exactly as it was sent. Events tracked before `identify()` keep the device ID, so they only match if the event carries `$user_id` or an email property.
 

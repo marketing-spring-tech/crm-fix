@@ -1,12 +1,24 @@
 {
-  "$comment": "Map Mixpanel event names to HubSpot. Each event gets contact properties mixpanel_<key>_first_at, mixpanel_<key>_last_at and mixpanel_<key>_count. logNote=true also drops a note on the contact timeline. setProperties are written verbatim on every occurrence. Replace these placeholders with your real Mixpanel event names, then re-run the setup script.",
+  "$comment": "Mixpanel project 'Spring' (4058092). Each event gets HubSpot contact properties mixpanel_<key>_first_at / _last_at / _count. logNote=true also adds a timeline note (milestones only). Events whose properties match `exclude` are skipped.",
   "events": [
-    { "mixpanelEvent": "Sign Up", "key": "signed_up", "label": "Signed up", "logNote": true },
-    { "mixpanelEvent": "Onboarding Completed", "key": "onboarding_completed", "label": "Onboarding completed", "logNote": true },
-    { "mixpanelEvent": "Trial Started", "key": "trial_started", "label": "Trial started", "logNote": true },
-    { "mixpanelEvent": "Subscription Started", "key": "subscription_started", "label": "Subscription started", "logNote": true },
-    { "mixpanelEvent": "Subscription Cancelled", "key": "subscription_cancelled", "label": "Subscription cancelled", "logNote": true },
-    { "mixpanelEvent": "Invite Sent", "key": "invite_sent", "label": "Teammate invited", "logNote": false }
+    { "mixpanelEvent": "app_installed", "key": "app_installed", "label": "App installed", "logNote": true },
+    { "mixpanelEvent": "account_created", "key": "account_created", "label": "Account created", "logNote": true },
+    { "mixpanelEvent": "onboarding_started", "key": "onboarding_started", "label": "Onboarding started" },
+    { "mixpanelEvent": "onboarding_first_result_shown", "key": "first_result_shown", "label": "First result shown", "logNote": true },
+    { "mixpanelEvent": "onboarding_finished", "key": "onboarding_finished", "label": "Onboarding finished", "logNote": true },
+    { "mixpanelEvent": "app_opened", "key": "app_opened", "label": "App opened" },
+    { "mixpanelEvent": "project_created", "key": "project_created", "label": "Project created" },
+    { "mixpanelEvent": "project_opened", "key": "project_opened", "label": "Project opened" },
+    { "mixpanelEvent": "prompt_sent", "key": "prompt_sent", "label": "Prompt sent" },
+    { "mixpanelEvent": "change_kept", "key": "change_kept", "label": "Change kept" },
+    { "mixpanelEvent": "github_connected", "key": "github_connected", "label": "GitHub connected", "logNote": true },
+    { "mixpanelEvent": "connector_connected", "key": "connector_connected", "label": "Connector connected" },
+    { "mixpanelEvent": "pr_merged", "key": "pr_merged", "label": "PR merged", "logNote": true },
+    { "mixpanelEvent": "share_published", "key": "share_published", "label": "Share published", "logNote": true },
+    { "mixpanelEvent": "team_invite_sent", "key": "team_invite_sent", "label": "Teammate invited", "logNote": true },
+    { "mixpanelEvent": "team_invite_accepted", "key": "team_invite_accepted", "label": "Team invite accepted", "logNote": true },
+    { "mixpanelEvent": "credit_cap_reached", "key": "credit_cap_reached", "label": "Credit cap reached", "logNote": true }
   ],
-  "noteProperties": ["plan", "plan_name", "amount", "$current_url", "utm_source"]
+  "noteProperties": ["signup_method", "signup_source", "source", "platform", "app_version", "credit_balance", "threshold", "visibility", "channel"],
+  "exclude": { "is_internal": [true, "true"], "app_env": ["dev"] }
 }

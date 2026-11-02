@@ -12,6 +12,7 @@ const config: EventsConfig = parseEventsConfig({
     { mixpanelEvent: "Invite Sent", key: "invite_sent", label: "Teammate invited", setProperties: { is_team_user: "true" } },
   ],
   noteProperties: ["plan"],
+  exclude: { is_internal: [true] },
 });
 const signup = config.events[0]!;
 const P = propertyNames(signup);
@@ -197,4 +198,11 @@ test("HubSpot client retries 429", async () => {
   let n = 0;
   const fetchFn = (async () => (++n < 2 ? new Response("", { status: 429, headers: { "retry-after": "0" } }) : new Response("{\"ok\":1}", { status: 200 }))) as unknown as typeof fetch;
   assert.equal((await new HubSpotClient("t", fetchFn).request<{ ok: number }>("GET", "/x")).ok, 1);
+});
+
+test("excluded (internal) events are skipped", async () => {
+  const hs = fakeHubSpot();
+  const s = await syncEvents([normalizeExportEvent(raw("Sign Up", { is_internal: true }))], config, hs.client, emptyState(), lookup, DEFAULT_OPTIONS, NOW);
+  assert.equal(s.excluded, 1);
+  assert.equal(hs.store.size, 0);
 });
